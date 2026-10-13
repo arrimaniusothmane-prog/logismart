@@ -1,0 +1,79 @@
+# ============================================================
+# LogiSmart — stack Docker de démonstration locale
+#
+#   docker compose up -d --build
+#   http://localhost:3000   (frontend)
+#   http://localhost:4000   (API)
+#
+# Conteneurs : pgvector/postgres (données), api (Express), web (nginx).
+# L'API applique les migrations au démarrage (AUTO_MIGRATE=1) et façonne
+# la base. Pour charger les données de démonstration :
+#   docker compose exec api npm run seed -w @logismart/api
+#
+# Remplacez JWT_SECRET / COOKIE_SECRET dans un vrai environnement.
+# ============================================================
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: logismart
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d logismart"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./apps/api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      AUTO_MIGRATE: "1"
+      API_HOST: 0.0.0.0
+      API_PORT: 4000
+      # Origine publique du frontend (CORS) — vue depuis le navigateur.
+      FRONTEND_URL: "http://localhost:3000"
+      DATABASE_URL: "postgresql://postgres:postgres@db:5432/logismart?schema=public"
+      JWT_SECRET: "dev-only-secret-please-change-8f5a2c91e47b0d63"
+      JWT_ACCESS_TTL: "15m"
+      JWT_REFRESH_TTL: "7d"
+      COOKIE_SECRET: "dev-only-cookie-secret-please-change-7b1e6c42"
+      COOKIE_SECURE: "false"
+      LOG_LEVEL: info
+      STORAGE_PROVIDER: local
+      STORAGE_LOCAL_DIR: apps/api/uploads
+      STORAGE_URL: "http://localhost:4000/uploads"
+      AI_PROVIDER: mock
+      EMBEDDING_PROVIDER: mock
+    volumes:
+      - api-uploads:/app/apps/api/uploads
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      # Même origine : le navigateur appelle /api, proxifié vers le conteneur api.
+      args:
+        VITE_API_URL: ""
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  api-uploads:
+  local-client-build:

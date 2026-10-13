@@ -1,0 +1,12 @@
+// Prisma configuration (Prisma >= 6.16)
+import path from 'node:path';
+import { defineConfig } from 'prisma/config';
+
+export default defineConfig({
+  schema: path.join('prisma', 'schema.prisma'),
+  migrations: {
+    path: path.join('prisma', 'migrations'),
+    seed: 'tsx src/db/seed.ts',
+  },
+  earlyAccess: false,
+});

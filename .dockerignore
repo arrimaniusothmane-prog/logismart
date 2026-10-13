@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+**/node_modules
+.npm
+
+# Builds
+dist
+**/dist
+
+# Environment — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Local database data (embedded Postgres)
+.pgdata
+*.pgdata
+
+# Logs / caches
+*.log
+.cache
+.vitest
+coverage
+.DS_Store
+.git
+.gitignore

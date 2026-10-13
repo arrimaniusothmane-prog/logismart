@@ -1,0 +1,493 @@
+// ============================================================
+// LogiSmart — schéma de données PostgreSQL
+// Multi-tenant : toute ressource métier porte companyId.
+// Les embeddings RAG sont stockés en double precision[] (portable,
+// sans extension) — voir README pour la montée en pgvector.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------- Enums -------------------------
+
+enum Role {
+  SUPER_ADMIN
+  COMPANY_ADMIN
+  DISPATCHER
+  DRIVER
+  RECRUITER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum OrderStatus {
+  PREPARED
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum CandidateStatus {
+  RECEIVED
+  SCREENING
+  SHORTLISTED
+  INTERVIEW
+  HIRED
+  REJECTED
+}
+
+enum DriverAvailability {
+  ONLINE
+  OFFLINE
+  BUSY
+  ON_LEAVE
+}
+
+enum VehicleType {
+  BIKE
+  MOTORCYCLE
+  CAR
+  VAN
+  TRUCK
+}
+
+enum JobStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum ProofType {
+  PHOTO
+  SIGNATURE
+}
+
+enum KnowledgeStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum EscalationStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum ChatRole {
+  user
+  assistant
+  system
+}
+
+// ------------------------- Comptes & tenancy -------------------------
+
+model Company {
+  id        String   @id @default(cuid())
+  // Identifiant public utilisé par le widget chatbot et les portails publics.
+  publicId  String   @unique @default(cuid())
+  name      String
+  slug      String   @unique
+  logo      String?
+  email     String?
+  phone     String?
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  drivers           DriverProfile[]
+  driverLocations   DriverLocation[]
+  customers         Customer[]
+  catalogItems      CatalogItem[]
+  orders            Order[]
+  jobOffers         JobOffer[]
+  candidates        Candidate[]
+  knowledgeDocuments KnowledgeDocument[]
+  chatSessions      ChatSession[]
+
+  @@index([name])
+}
+
+model User {
+  id           String     @id @default(cuid())
+  // SUPER_ADMIN : companyId null (contexte plateforme).
+  companyId    String?
+  name         String
+  email        String     @unique
+  passwordHash String
+  role         Role       @default(COMPANY_ADMIN)
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  company      Company?   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  driverProfile DriverProfile?
+  refreshTokens RefreshToken[]
+  assignedEscalations SupportEscalation[] @relation("EscalationAssignee")
+  hiredCandidate Candidate? @relation("CandidateHiredUser")
+
+  @@index([companyId, role])
+  @@index([companyId, status])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  // Hash SHA-256 du jeton — le jeton en clair n'est jamais stocké.
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ------------------------- Livreurs -------------------------
+
+model DriverProfile {
+  id              String            @id @default(cuid())
+  userId          String            @unique
+  companyId       String
+  phone           String?
+  vehicleType     VehicleType       @default(MOTORCYCLE)
+  licenseNumber   String?
+  availability    DriverAvailability @default(OFFLINE)
+  currentLatitude Float?
+  currentLongitude Float?
+  lastLocationAt  DateTime?
+  totalDeliveries Int               @default(0)
+  successfulDeliveries Int          @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  orders   Order[]
+  locations DriverLocation[]
+  hiredFromCandidate Candidate? @relation("CandidateDriverProfile")
+
+  @@index([companyId, availability])
+}
+
+model DriverLocation {
+  id        String   @id @default(cuid())
+  driverId  String
+  companyId String
+  latitude  Float
+  longitude Float
+  accuracy  Float?
+  speed     Float?
+  heading   Float?
+  timestamp DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  driver  DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([driverId, timestamp])
+  @@index([companyId, timestamp])
+}
+
+// ------------------------- Clients & commandes -------------------------
+
+model Customer {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  // Hash bcrypt du mot de passe du portail client (null = compte non activé).
+  passwordHash String?
+  // Dernière consultation des notifications du portail client (null = jamais).
+  notificationsReadAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  orders  Order[]
+
+  @@index([companyId, name])
+  @@index([email])
+}
+
+// ------------------------- Catalogue (services & produits) -------------------------
+
+enum CatalogType {
+  SERVICE
+  PRODUCT
+}
+
+enum CatalogStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model CatalogItem {
+  id          String        @id @default(cuid())
+  companyId   String
+  name        String
+  description String?
+  type        CatalogType   @default(SERVICE)
+  // Prix en euros, null = sur devis.
+  price       Float?
+  status      CatalogStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, type])
+  @@index([companyId, status])
+}
+
+model Order {
+  id                 String      @id @default(cuid())
+  companyId          String
+  // Numéro de suivi public, lisible par l'humain.
+  trackingNumber     String      @unique
+  customerId         String
+  driverId           String?
+  pickupAddress      String
+  deliveryAddress    String
+  status             OrderStatus @default(PREPARED)
+  note               String?
+  estimatedDeliveryAt DateTime?
+  deliveredAt        DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  company    Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer   Customer            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  driver     DriverProfile?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  history    OrderStatusHistory[]
+  proofs     DeliveryProof[]
+  trackingTokens TrackingToken[]
+
+  @@index([companyId, status])
+  @@index([companyId, createdAt])
+  @@index([driverId, status])
+  @@index([customerId])
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  status    OrderStatus
+  latitude  Float?
+  longitude Float?
+  note      String?
+  createdAt DateTime    @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+model DeliveryProof {
+  id            String    @id @default(cuid())
+  orderId       String
+  type          ProofType
+  fileUrl       String?
+  // Donnée de signature (SVG/data-URL) — pas de fichier volumineux en base.
+  signatureData String?
+  createdAt     DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model TrackingToken {
+  id        String    @id @default(cuid())
+  orderId   String
+  token     String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([expiresAt])
+}
+
+// ------------------------- Recrutement IA -------------------------
+
+model JobOffer {
+  id          String    @id @default(cuid())
+  companyId   String
+  title       String
+  description String
+  requirements String?
+  location    String?
+  // True si le poste correspond à un livreur → recrue → compte DRIVER.
+  isDriverRole Boolean  @default(false)
+  status      JobStatus @default(DRAFT)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidates Candidate[]
+
+  @@index([companyId, status])
+}
+
+model Candidate {
+  id                String          @id @default(cuid())
+  companyId         String
+  jobOfferId        String
+  name              String
+  email             String
+  phone             String?
+  cvUrl             String?
+  note              String?
+  status            CandidateStatus @default(RECEIVED)
+  compatibilityScore Float?
+  // Décomposition du score (compétences / expérience / exigences / certifications).
+  scoreBreakdown    Json?
+  aiSummary         String?
+  sourceFileName    String?
+  userId            String?         @unique
+  driverProfileId   String?         @unique
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  jobOffer  JobOffer        @relation(fields: [jobOfferId], references: [id], onDelete: Cascade)
+  skills    CandidateSkill[]
+  questions InterviewQuestion[]
+  hiredUser User?           @relation("CandidateHiredUser", fields: [userId], references: [id], onDelete: SetNull)
+  driverProfile DriverProfile? @relation("CandidateDriverProfile", fields: [driverProfileId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([jobOfferId, status])
+}
+
+model CandidateSkill {
+  id          String  @id @default(cuid())
+  candidateId String
+  skill       String
+  // Niveau libre ("Débutant", "Avancé"…) et score numérique 0-100 si fourni.
+  level       String  @default("")
+  score       Int?
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+}
+
+model InterviewQuestion {
+  id          String   @id @default(cuid())
+  candidateId String
+  question    String
+  // technique | experience | comportemental | situationnel | poste
+  category    String
+  createdAt   DateTime @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+}
+
+// ------------------------- Base de connaissances (RAG) -------------------------
+
+model KnowledgeDocument {
+  id        String         @id @default(cuid())
+  companyId String
+  name      String
+  fileUrl   String?
+  content   String         @default("")
+  status    KnowledgeStatus @default(PENDING)
+  error     String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  chunks   KnowledgeChunk[]
+
+  @@index([companyId, status])
+}
+
+model KnowledgeChunk {
+  id         String   @id @default(cuid())
+  documentId String
+  content    String
+  // Vecteur dense ; écrit/lu en SQL brut (type non exposé par le client Prisma).
+  // Portabilité : double precision[] fonctionne sans extension.
+  // pgvector (vector) est un remplacement drop-in à l'échelle — voir README.
+  embedding  Unsupported("double precision[]")?
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+}
+
+// ------------------------- Support client -------------------------
+
+model ChatSession {
+  id                String   @id @default(cuid())
+  companyId         String
+  customerIdentifier String?
+  trackingNumber    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  messages    ChatMessage[]
+  escalation  SupportEscalation?
+
+  @@index([companyId, createdAt])
+  @@index([companyId, trackingNumber])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      ChatRole
+  content   String
+  createdAt DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+}
+
+model SupportEscalation {
+  id             String           @id @default(cuid())
+  sessionId      String           @unique
+  companyId      String
+  status         EscalationStatus @default(OPEN)
+  reason         String
+  assignedUserId String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  session       ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  assignedUser  User?       @relation("EscalationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+}

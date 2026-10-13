@@ -1,0 +1,36 @@
+{
+  "name": "logismart",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LogiSmart \u2014 SaaS multi-tenant pour entreprises de livraison (logistique, support IA, recrutement IA)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "npm run build -w @logismart/shared && npm run build -w @logismart/api && npm run build -w @logismart/web",
+    "build:shared": "npm run build -w @logismart/shared",
+    "typecheck": "npm run typecheck -w @logismart/shared && npm run typecheck -w @logismart/api && npm run typecheck -w @logismart/web && npm run typecheck -w @logismart/local-client",
+    "lint": "npm run lint -w @logismart/api && npm run lint -w @logismart/web && npm run lint -w @logismart/local-client",
+    "test": "npm run test -w @logismart/api && npm run test -w @logismart/web",
+    "db:start": "node scripts/db.mjs",
+    "db:reset": "node scripts/db.mjs --reset",
+    "db:migrate": "npm run migrate -w @logismart/api",
+    "db:seed": "npm run seed -w @logismart/api",
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm run dev -w @logismart/api",
+    "dev:web": "npm run dev -w @logismart/web",
+    "start:api": "npm run start -w @logismart/api",
+    "preview": "npm run build && npm run start -w @logismart/api",
+    "dev:local": "npm run dev -w @logismart/local-client",
+    "build:local": "npm run build -w @logismart/local-client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "embedded-postgres": "^18.4.0-beta.17"
+  }
+}

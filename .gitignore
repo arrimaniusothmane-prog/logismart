@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.npm
+
+# Builds
+dist/
+build/
+.next/
+*.tsbuildinfo
+
+# Environment — never commit secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Database (embedded Postgres dev data)
+.pgdata/
+*.pgdata/
+*.pgdata-test/
+.pgdata-test/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pino-*.log
+
+# Test / coverage
+coverage/
+.vitest/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Uploads (local storage provider)
+apps/api/uploads/*
+!apps/api/uploads/.gitkeep
+
+# Vite
+apps/web/dist/
+
+# Misc
+*.local
+.cache/
+tmp/
